@@ -23,6 +23,7 @@ engine = SynthesiaEngine(num_agents=30)
 @app.websocket("/ws/simulation")
 async def simulation_ws(websocket: WebSocket):
     """WebSocket endpoint for real-time simulation"""
+    global engine
     await websocket.accept()
     print("Client connected to simulation")
 
@@ -44,7 +45,6 @@ async def simulation_ws(websocket: WebSocket):
                 if data.get('action') == 'inject':
                     engine.inject_event(data.get('event'), data.get('data'))
                 elif data.get('action') == 'reset':
-                    global engine
                     engine = SynthesiaEngine(num_agents=data.get('agents', 30))
                     engine.callback = send_state
                     task.cancel()

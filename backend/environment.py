@@ -1,7 +1,13 @@
 import numpy as np
 import random
 from typing import List, Dict
-import noise
+
+# Simple Perlin noise fallback (since noise library requires C++ compiler)
+def _simple_noise(x: float, y: float, base: int = 0) -> float:
+    """Simple deterministic noise function using sine waves"""
+    import math
+    return math.sin(x * 0.01 + base) * math.cos(y * 0.01 + base) + \
+           math.sin(x * 0.02 + y * 0.015) * 0.5
 
 class Environment:
     def __init__(self, width: float = 1000, height: float = 1000, max_nodes: int = 150):
@@ -23,7 +29,7 @@ class Environment:
             y = random.uniform(0, self.height)
 
             # Determine type based on position (creates regions)
-            type_noise = noise.pnoise2(x/300, y/300)
+            type_noise = _simple_noise(x/300, y/300)
             node_type = self._noise_to_type(type_noise)
 
             # Value varies
@@ -85,7 +91,7 @@ class Environment:
             x = random.uniform(0, self.width)
             y = random.uniform(0, self.height)
 
-        type_noise = noise.pnoise2(x/300, y/300, base=self.tick)
+        type_noise = _simple_noise(x/300, y/300, base=self.tick)
         node_type = self._noise_to_type(type_noise)
 
         self.nodes.append({
