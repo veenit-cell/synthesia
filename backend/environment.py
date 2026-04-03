@@ -18,6 +18,22 @@ class Environment:
         self.pheromones: Dict[tuple[int, int], float] = {}  # Grid-based
         self.tick = 0
 
+        # Season system (0=spring, 1=summer, 2=fall, 3=winter)
+        self.season = 0
+        self.season_duration = 1000  # ticks per season
+        self.season_names = ['spring', 'summer', 'fall', 'winter']
+        self.season_modifiers = {
+            'spring': {'spawn_rate': 1.2, 'regen_rate': 1.5, 'value_mult': 1.0},
+            'summer': {'spawn_rate': 1.5, 'regen_rate': 1.0, 'value_mult': 1.1},
+            'fall': {'spawn_rate': 0.8, 'regen_rate': 1.2, 'value_mult': 1.2},
+            'winter': {'spawn_rate': 0.4, 'regen_rate': 0.5, 'value_mult': 1.5}
+        }
+
+        # Catastrophe system
+        self.catastrophe_active = False
+        self.catastrophe_timer = 0
+        self.affected_regions: List[Dict] = []
+
         # Initialize with some nodes
         self._seed_environment()
 
@@ -56,20 +72,73 @@ class Environment:
         else:
             return 'technology'
 
+    def _spawn_special_node(self, node_type: str):
+        """Spawn special node types (hazard, portal, mystery)"""
+        x = random.uniform(100, self.width - 100)
+        y = random.uniform(100, self.height - 100)
+
+        if node_type == 'hazard':
+            self.nodes.append({
+                'id': f"hazard_{self.tick}_{random.randint(0, 1000)}",
+                'x': x, 'y': y,
+                'type': 'hazard',
+                'value': random.uniform(20, 40),
+                'max_value': 40,
+                'depleted': False,
+                'damage': random.uniform(5, 15)
+            })
+        elif node_type == 'portal':
+            self.nodes.append({
+                'id': f"portal_{self.tick}_{random.randint(0, 1000)}",
+                'x': x, 'y': y,
+                'type': 'portal',
+                'value': 100,
+                'max_value': 100,
+                'depleted': False,
+                'target_x': random.uniform(0, self.width),
+                'target_y': random.uniform(0, self.height)
+            })
+        elif node_type == 'mystery':
+            self.nodes.append({
+                'id': f"mystery_{self.tick}_{random.randint(0, 1000)}",
+                'x': x, 'y': y,
+                'type': 'mystery',
+                'value': random.uniform(50, 100),
+                'max_value': 100,
+                'depleted': False,
+                'effect': random.choice(['boost', 'teleport', 'transform'])
+            })
+
     def update(self):
         """Environmental dynamics"""
         self.tick += 1
 
-        # Spawn new nodes occasionally (higher chance in active areas)
-        if len(self.nodes) < self.max_nodes and random.random() < 0.1:
-            self._spawn_node()
+        # Update season
+        self.season = (self.tick // self.season_duration) % 4
+        current_season = self.season_names[self.season]
+        modifiers = self.season_modifiers[current_season]
 
-        # Regenerate depleted nodes slowly
+        # Spawn new nodes occasionally (modified by season)
+        base_spawn_chance = 0.1 * modifiers['spawn_rate']
+        if len(self.nodes) < self.max_nodes and random.random() < base_spawn_chance:
+            self._spawn_node(modifiers['value_mult'])
+
+        # Occasional special nodes (5% chance)
+        if random.random() < 0.05:
+            special_type = random.choice(['hazard', 'portal', 'mystery'])
+            self._spawn_special_node(special_type)
+
+        # Regenerate depleted nodes slowly (modified by season)
+        regen_rate = 0.05 * modifiers['regen_rate']
         for node in self.nodes:
             if node['depleted']:
-                node['value'] = min(node['max_value'], node['value'] + 0.05)
+                node['value'] = min(node['max_value'], node['value'] + regen_rate)
                 if node['value'] > node['max_value'] * 0.3:
                     node['depleted'] = False
+
+        # Handle catastrophes
+        if self.catastrophe_active:
+            self._update_catastrophe()
 
         # Decay pheromones
         to_remove = []
@@ -80,7 +149,7 @@ class Environment:
         for key in to_remove:
             del self.pheromones[key]
 
-    def _spawn_node(self):
+    def _spawn_node(self, value_mult: float = 1.0):
         """Spawn a new information node, preferring cluster areas"""
         # 70% chance to spawn near existing nodes (clustering)
         if random.random() < 0.7 and self.nodes:
@@ -94,15 +163,68 @@ class Environment:
         type_noise = _simple_noise(x/300, y/300, base=self.tick)
         node_type = self._noise_to_type(type_noise)
 
+        base_value = random.uniform(40, 100) * value_mult
         self.nodes.append({
             'id': f"node_{self.tick}_{random.randint(0, 1000)}",
             'x': x,
             'y': y,
             'type': node_type,
-            'value': random.uniform(40, 100),
-            'max_value': 100,
+            'value': base_value,
+            'max_value': base_value,
             'depleted': False
         })
+
+    def trigger_catastrophe(self, catastrophe_type: str = 'wildfire'):
+        """Trigger an environmental catastrophe"""
+        self.catastrophe_active = True
+        self.catastrophe_timer = 200  # Lasts 200 ticks
+
+        if catastrophe_type == 'wildfire':
+            # Create spreading fire regions
+            num_fires = random.randint(3, 6)
+            for _ in range(num_fires):
+                self.affected_regions.append({
+                    'type': 'fire',
+                    'x': random.uniform(100, self.width - 100),
+                    'y': random.uniform(100, self.height - 100),
+                    'radius': 50,
+                    'spread_rate': 2.0,
+                    'damage': 10
+                })
+        elif catastrophe_type == 'flood':
+            # Create flooding zones
+            self.affected_regions.append({
+                'type': 'flood',
+                'x': random.uniform(0, self.width),
+                'y': random.uniform(0, self.height),
+                'radius': 300,
+                'spread_rate': 0.5,
+                'damage': 5
+            })
+        elif catastrophe_type == 'drought':
+            # Reduce all node values
+            for node in self.nodes:
+                node['value'] *= 0.5
+            self.catastrophe_active = False
+
+    def _update_catastrophe(self):
+        """Update active catastrophe effects"""
+        self.catastrophe_timer -= 1
+
+        for region in self.affected_regions:
+            region['radius'] += region['spread_rate']
+
+            # Damage nodes in affected area
+            for node in self.nodes:
+                dist = np.sqrt((node['x'] - region['x'])**2 + (node['y'] - region['y'])**2)
+                if dist < region['radius']:
+                    node['value'] = max(0, node['value'] - region['damage'])
+                    if node['value'] < 10:
+                        node['depleted'] = True
+
+        if self.catastrophe_timer <= 0:
+            self.catastrophe_active = False
+            self.affected_regions = []
 
     def harvest_node(self, node_id: str, amount: float) -> float:
         """Agent harvests from a node"""
@@ -141,5 +263,20 @@ class Environment:
             'node_count': len(self.nodes),
             'total_value': round(total_value, 1),
             'pheromone_trails': len(self.pheromones),
-            'by_type': by_type
+            'by_type': by_type,
+            'season': self.season_names[self.season],
+            'season_progress': (self.tick % self.season_duration) / self.season_duration,
+            'catastrophe_active': self.catastrophe_active,
+            'affected_regions': len(self.affected_regions)
         }
+
+    def get_catastrophe_regions(self) -> List[Dict]:
+        """Return active catastrophe regions for visualization"""
+        if not self.catastrophe_active:
+            return []
+        return [{
+            'type': r['type'],
+            'x': r['x'],
+            'y': r['y'],
+            'radius': r['radius']
+        } for r in self.affected_regions]
