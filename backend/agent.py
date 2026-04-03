@@ -41,6 +41,17 @@ class Forager:
     exploration_rate: float = field(default_factory=lambda: random.uniform(0.3, 0.7))
     sociability: float = field(default_factory=lambda: random.uniform(0.3, 0.7))
     risk_tolerance: float = field(default_factory=lambda: random.uniform(0.3, 0.7))
+    aggression: float = field(default_factory=lambda: random.uniform(0.0, 0.3))  # Combat tendency
+
+    # Specialization (evolves based on behavior)
+    specialization: str = field(default='generalist')  # generalist, explorer, harvester, social, fighter
+    spec_progress: Dict[str, float] = field(default_factory=lambda: {
+        'explorer': 0, 'harvester': 0, 'social': 0, 'fighter': 0
+    })
+
+    # Combat stats
+    health: float = 100.0
+    combat_cooldown: int = 0
 
     # Memory
     memory: DualMemorySystem = field(default_factory=lambda: DualMemorySystem())
@@ -187,6 +198,10 @@ class Forager:
             else:
                 self.velocity = Vector2D(0, 0)
 
+            # Track explorer progress
+            self.spec_progress['explorer'] += 0.1
+            self._update_specialization()
+
         elif action == "approach" and target:
             dx = target[0] - self.position.x
             dy = target[1] - self.position.y
@@ -213,10 +228,9 @@ class Forager:
         self.action_target = target
         self.last_decision_reason = self.last_decision_reason or "executing"
 
-    def harvest(self, node: dict) -> float:
+    def harvest(self, node: dict, amount: float) -> float:
         """Harvest from a node"""
-        harvest_amount = min(20, 100 - self.energy)
-        self.energy = min(100, self.energy + harvest_amount)
+        self.energy = min(100, self.energy + amount)
         self.curiosity = min(100, self.curiosity + 10)
 
         # Learn from this
@@ -230,7 +244,11 @@ class Forager:
         )
         self.memory.observe(obs)
 
-        return harvest_amount
+        # Track specialization
+        self.spec_progress['harvester'] += 1
+        self._update_specialization()
+
+        return amount
 
     def communicate(self, other: 'Forager'):
         """Share memories with another agent"""
@@ -256,6 +274,55 @@ class Forager:
             other.reputation = min(100, other.reputation + 2)
             self.reputation = min(100, self.reputation + 1)
 
+        # Track specialization
+        self.spec_progress['social'] += 1
+        self._update_specialization()
+
+    def can_attack(self, other: 'Forager') -> bool:
+        """Determine if this agent will attack another"""
+        if self.combat_cooldown > 0:
+            return False
+        # Attack if much stronger and other has resources
+        power_diff = (self.energy + self.health) - (other.energy + other.health)
+        if power_diff > 30 and other.energy > 50 and self.aggression > 0.5:
+            return True
+        return False
+
+    def attack(self, other: 'Forager') -> float:
+        """Attack another agent, steal some energy"""
+        damage = random.uniform(10, 25) * (0.5 + self.aggression)
+        stolen = min(other.energy * 0.3, 30)
+
+        other.health -= damage
+        other.energy -= stolen
+        self.energy = min(100, self.energy + stolen * 0.7)  # 70% efficiency
+
+        self.combat_cooldown = 50  # Can't attack for 50 ticks
+        self.spec_progress['fighter'] += 5
+        self._update_specialization()
+
+        return stolen
+
+    def take_damage(self, amount: float):
+        """Take damage from hazards"""
+        self.health = max(0, self.health - amount)
+        if self.health <= 0:
+            self.energy = 0  # "Death" - can't act
+
+    def heal(self):
+        """Slow health regeneration"""
+        self.health = min(100, self.health + 0.05)
+        if self.combat_cooldown > 0:
+            self.combat_cooldown -= 1
+
+    def _update_specialization(self):
+        """Update specialization based on behavior"""
+        total = sum(self.spec_progress.values())
+        if total > 100:  # Only update after significant activity
+            max_spec = max(self.spec_progress, key=self.spec_progress.get)
+            if self.spec_progress[max_spec] / total > 0.4:
+                self.specialization = max_spec
+
     def mutate_strategy(self, mutation_rate: float = 0.1):
         """Evolve strategy parameters"""
         if random.random() < mutation_rate:
@@ -274,13 +341,17 @@ class Forager:
             'vx': self.velocity.x,
             'vy': self.velocity.y,
             'energy': self.energy,
+            'health': self.health,
             'curiosity': self.curiosity,
             'reputation': self.reputation,
             'action': self.current_action,
             'reason': self.last_decision_reason,
             'strategy': {
                 'exploration': round(self.exploration_rate, 2),
-                'sociability': round(self.sociability, 2)
+                'sociability': round(self.sociability, 2),
+                'aggression': round(self.aggression, 2)
             },
+            'specialization': self.specialization,
+            'combat_cooldown': self.combat_cooldown,
             'memory_count': len(self.memory.long_term)
         }
