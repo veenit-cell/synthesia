@@ -38,6 +38,10 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Remove default nginx site
 RUN rm -f /etc/nginx/sites-enabled/default
 
+# Copy entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Create supervisor config to run both services
 RUN mkdir -p /var/log/supervisor
 COPY <<'EOF' /etc/supervisor/conf.d/synthesia.conf
@@ -69,15 +73,14 @@ stderr_logfile_maxbytes=0
 EOF
 
 # Environment defaults
-ENV PORT=8000
 ENV NUM_AGENTS=30
 ENV MAX_FPS=30
 ENV PYTHONUNBUFFERED=1
 
-# Expose port 80 (nginx) - the single entry point
+# Expose port (PaaS sets PORT env var dynamically)
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost/health || exit 1
+    CMD curl -f http://localhost:${PORT:-80}/health || exit 1
 
-CMD ["supervisord", "-c", "/etc/supervisor/conf.d/synthesia.conf"]
+CMD ["/app/entrypoint.sh"]
