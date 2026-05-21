@@ -112,3 +112,4 @@ export VITE_API_URL=ws://your-server:8000
 ## License
 
 MIT
+# trigger
