@@ -1,0 +1,17 @@
+# Render Blueprint - https://render.com/docs/blueprint-spec
+# Deploy: connect your repo to Render, it will auto-detect this file
+
+services:
+  - type: web
+    name: synthesia
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: NUM_AGENTS
+        value: 30
+      - key: MAX_FPS
+        value: 30
+    healthCheckPath: /health

@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSimStore } from './store';
 import { SimulationState, Agent, Node } from './types';
@@ -9,35 +10,64 @@ const SCALE = 0.8;
 export function Simulation() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const { state, setState, setConnected, selectedAgent, setSelectedAgent } = useSimStore();
+  const { connected, state, setState, setConnected, selectedAgent, setSelectedAgent } = useSimStore();
   const [showPheromones, setShowPheromones] = useState(true);
   const [showTrails, setShowTrails] = useState(true);
   const [showCommunities, setShowCommunities] = useState(true);
   const [showHeatmap, setShowHeatmap] = useState(false);
   const trailsRef = useRef<Map<string, {x: number, y: number}[]>>(new Map());
 
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/simulation');
-    wsRef.current = ws;
+    // Dynamic WebSocket URL: env var > auto-detect from page location
+    const wsUrl = import.meta.env.VITE_WS_URL || 
+      `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/simulation`;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onmessage = (e) => {
-      const data: SimulationState = JSON.parse(e.data);
-      setState(data);
+    function connect() {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-      // Update trails
-      data.agents.forEach(agent => {
-        if (!trailsRef.current.has(agent.id)) {
-          trailsRef.current.set(agent.id, []);
-        }
-        const trail = trailsRef.current.get(agent.id)!;
-        trail.push({x: agent.x, y: agent.y});
-        if (trail.length > 50) trail.shift();
-      });
+      ws.onopen = () => {
+        setConnected(true);
+        reconnectAttemptsRef.current = 0;
+      };
+
+      ws.onclose = () => {
+        setConnected(false);
+        // Exponential backoff reconnect: 1s, 2s, 4s, 8s ... max 30s
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+        reconnectAttemptsRef.current++;
+        reconnectTimeoutRef.current = setTimeout(connect, delay);
+      };
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onmessage = (e) => {
+        const data: SimulationState = JSON.parse(e.data);
+        setState(data);
+
+        // Update trails
+        data.agents.forEach(agent => {
+          if (!trailsRef.current.has(agent.id)) {
+            trailsRef.current.set(agent.id, []);
+          }
+          const trail = trailsRef.current.get(agent.id)!;
+          trail.push({x: agent.x, y: agent.y});
+          if (trail.length > 50) trail.shift();
+        });
+      };
+    }
+
+    connect();
+
+    return () => {
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      wsRef.current?.close();
     };
-
-    return () => ws.close();
   }, []);
 
   const drawHeatmap = useCallback((ctx: CanvasRenderingContext2D, agents: Agent[]) => {
@@ -161,7 +191,7 @@ export function Simulation() {
 
     // Draw trails
     if (showTrails) {
-      trailsRef.current.forEach((trail, agentId) => {
+      trailsRef.current.forEach((trail, _agentId) => {
         if (trail.length < 2) return;
         ctx.strokeStyle = 'rgba(100, 150, 255, 0.2)';
         ctx.lineWidth = 1;
@@ -320,10 +350,30 @@ export function Simulation() {
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 text-white overflow-hidden">
+      {/* Reconnecting overlay */}
+      {!connected && !state && (
+        <div className="fixed inset-0 z-[100] bg-gray-950/90 backdrop-blur-sm flex items-center justify-center">
+          <div className="text-center">
+            <div className="relative mb-6">
+              <div className="w-16 h-16 rounded-full border-2 border-cyan-500/20 animate-spin" style={{ animationDuration: '2s' }}>
+                <div className="absolute inset-0 rounded-full border-t-2 border-cyan-400" />
+              </div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-2xl">◈</span>
+              </div>
+            </div>
+            <h1 className="text-2xl font-bold bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent">
+              SYNTHESIA
+            </h1>
+            <p className="text-sm text-gray-500 mt-2 animate-pulse">Connecting to simulation...</p>
+          </div>
+        </div>
+      )}
+
       {/* Connection status indicator */}
       <div className="fixed top-4 left-4 z-50 flex items-center gap-2">
-        <div className={`w-2 h-2 rounded-full animate-pulse ${state ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]'}`} />
-        <span className="text-xs text-gray-400 font-medium">{state ? 'Live' : 'Disconnected'}</span>
+        <div className={`w-2 h-2 rounded-full animate-pulse ${connected ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]'}`} />
+        <span className="text-xs text-gray-400 font-medium">{connected ? 'Live' : 'Reconnecting...'}</span>
       </div>
 
       {/* Tick counter */}
@@ -361,10 +411,12 @@ export function Simulation() {
             <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Season</h2>
             <div className="flex items-center gap-3 mb-3">
               <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shadow-lg ${
-                state.environment.season === 'spring' && 'bg-green-500/20 text-green-400 shadow-green-500/20',
-                state.environment.season === 'summer' && 'bg-yellow-500/20 text-yellow-400 shadow-yellow-500/20',
-                state.environment.season === 'fall' && 'bg-orange-500/20 text-orange-400 shadow-orange-500/20',
-                state.environment.season === 'winter' && 'bg-blue-500/20 text-blue-400 shadow-blue-500/20',
+                ({
+                  spring: 'bg-green-500/20 text-green-400 shadow-green-500/20',
+                  summer: 'bg-yellow-500/20 text-yellow-400 shadow-yellow-500/20',
+                  fall: 'bg-orange-500/20 text-orange-400 shadow-orange-500/20',
+                  winter: 'bg-blue-500/20 text-blue-400 shadow-blue-500/20',
+                } as Record<string, string>)[state.environment.season] || ''
               }`}>
                 {state.environment.season === 'spring' && '🌱'}
                 {state.environment.season === 'summer' && '☀️'}

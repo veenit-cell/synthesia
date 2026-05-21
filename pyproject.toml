@@ -1,6 +1,5 @@
 [project]
 name = "synthesia"
-version = "0.1.0"
-
-[tool.vercel]
-entrypoint = "backend.main:app"
+version = "1.0.0"
+description = "Emergent Knowledge Ecosystem - Multi-agent simulation"
+requires-python = ">=3.11"
